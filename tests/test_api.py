@@ -294,14 +294,10 @@ class TestFabricar:
         body = {"problema": problema, "sector": sector}
         if contexto:
             body["contexto"] = contexto
-        with patch("skills.fabricator.OpenAI") as mock_cls, \
+        with patch("skills.fabricator._fabricar_con_claude", return_value=FABRICAR_RESPONSE_JSON), \
+             patch("skills.fabricator._fabricar_con_openai", return_value=FABRICAR_RESPONSE_JSON), \
              patch("skills.fabricator._save_generated"), \
              patch("skills.fabricator._load_generated", return_value=[]):
-            instance = MagicMock()
-            instance.chat.completions.create.return_value = MagicMock(
-                choices=[MagicMock(message=MagicMock(content=FABRICAR_RESPONSE_JSON))]
-            )
-            mock_cls.return_value = instance
             return client.post("/fabricar", json=body, headers=HEADERS)
 
     def test_fabricar_devuelve_200(self, client):

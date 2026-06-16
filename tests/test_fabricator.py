@@ -10,12 +10,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-def make_openai_mock(content: str):
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = content
-    mock_instance = MagicMock()
-    mock_instance.chat.completions.create.return_value = mock_response
-    return mock_instance
+def patch_fabricador(raw_content: str):
+    """
+    Parchea _fabricar_con_claude y _fabricar_con_openai para devolver raw_content.
+    Usar como context manager: `with patch_fabricador(json_str):`
+    """
+    from unittest.mock import patch as _patch
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(_patch("skills.fabricator._fabricar_con_claude", return_value=raw_content))
+    stack.enter_context(_patch("skills.fabricator._fabricar_con_openai", return_value=raw_content))
+    return stack
 
 
 SKILL_JSON_VALIDO = json.dumps({
@@ -81,8 +87,7 @@ class TestFabricarSkill:
         try:
             fabricator.GENERATED_FILE = tmp_generated_file
 
-            with patch("skills.fabricator.OpenAI") as mock_cls:
-                mock_cls.return_value = make_openai_mock(SKILL_JSON_VALIDO)
+            with patch_fabricador(SKILL_JSON_VALIDO):
                 result = fabricator.fabricar_skill(
                     problema="No sé si el precio del piso está bien",
                     sector="inmobiliaria",
@@ -103,8 +108,7 @@ class TestFabricarSkill:
         try:
             fabricator.GENERATED_FILE = tmp_generated_file
 
-            with patch("skills.fabricator.OpenAI") as mock_cls:
-                mock_cls.return_value = make_openai_mock(SKILL_JSON_VALIDO)
+            with patch_fabricador(SKILL_JSON_VALIDO):
                 fabricator.fabricar_skill("Mi problema", "inmobiliaria")
 
             assert os.path.exists(tmp_generated_file)
@@ -123,12 +127,10 @@ class TestFabricarSkill:
         try:
             fabricator.GENERATED_FILE = tmp_generated_file
 
-            with patch("skills.fabricator.OpenAI") as mock_cls:
-                mock_cls.return_value = make_openai_mock(SKILL_JSON_VALIDO)
+            with patch_fabricador(SKILL_JSON_VALIDO):
                 first = fabricator.fabricar_skill("Problema 1", "inmobiliaria")
 
-            with patch("skills.fabricator.OpenAI") as mock_cls:
-                mock_cls.return_value = make_openai_mock(SKILL_JSON_VALIDO)
+            with patch_fabricador(SKILL_JSON_VALIDO):
                 second = fabricator.fabricar_skill("Mismo problema", "inmobiliaria")
 
             assert first["id"] != second["id"], "IDs duplicados no deben quedarse iguales"
@@ -157,8 +159,7 @@ class TestFabricarSkill:
         try:
             fabricator.GENERATED_FILE = tmp_generated_file
 
-            with patch("skills.fabricator.OpenAI") as mock_cls:
-                mock_cls.return_value = make_openai_mock("Texto sin JSON válido aquí")
+            with patch_fabricador("Texto sin JSON válido aquí"):
                 with pytest.raises(ValueError):
                     fabricator.fabricar_skill("Problema", "veterinaria")
         finally:
@@ -167,24 +168,24 @@ class TestFabricarSkill:
     def test_fabricar_acepta_contexto_opcional(self, tmp_generated_file):
         from skills import fabricator
         original_file = fabricator.GENERATED_FILE
+        captured = {}
+
+        def mock_claude(prompt):
+            captured["prompt"] = prompt
+            return SKILL_JSON_VALIDO
 
         try:
             fabricator.GENERATED_FILE = tmp_generated_file
 
-            with patch("skills.fabricator.OpenAI") as mock_cls:
-                mock_instance = make_openai_mock(SKILL_JSON_VALIDO)
-                mock_cls.return_value = mock_instance
-
+            with patch("skills.fabricator._fabricar_con_claude", side_effect=mock_claude), \
+                 patch("skills.fabricator._fabricar_con_openai", return_value=SKILL_JSON_VALIDO):
                 fabricator.fabricar_skill(
                     problema="Gestionar facturas",
                     sector="gestoria",
                     contexto="Tenemos 200 clientes autónomos"
                 )
 
-            call_args = mock_instance.chat.completions.create.call_args
-            messages = call_args.kwargs.get("messages", [])
-            contenido_total = " ".join(m.get("content", "") for m in messages)
-            assert "200 clientes autónomos" in contenido_total
+            assert "200 clientes autónomos" in captured.get("prompt", "")
         finally:
             fabricator.GENERATED_FILE = original_file
 
@@ -211,13 +212,12 @@ class TestFabricarSkill:
         try:
             fabricator.GENERATED_FILE = tmp_generated_file
 
-            with patch("skills.fabricator.OpenAI") as mock_cls:
-                mock_cls.return_value = make_openai_mock(json_sin_version)
+            with patch_fabricador(json_sin_version):
                 result = fabricator.fabricar_skill("Problema dental", "dental")
 
             assert result["version"] == "1.0.0"
             assert result["model"] == "gpt-4o"
-            assert result["fabricado_por"] == "MetaFabricador v1"
+            assert "MetaFabricador v2" in result["fabricado_por"]
         finally:
             fabricator.GENERATED_FILE = original_file
 

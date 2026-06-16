@@ -1,15 +1,13 @@
 """
 MetaFabricador — Genera skills desde la descripción de un problema.
 El usuario dice "tengo este problema" → IA genera la skill → se registra → se vende.
-Usa GPT-4o como motor principal (OPENAI_API_KEY). Fallback a Claude si está disponible.
+Motor principal: Claude claude-sonnet-4-6 (Anthropic). Fallback: GPT-4o (OpenAI).
 """
 import json
 import os
 import re
 import time
 from typing import Optional
-
-from openai import OpenAI
 
 from .dynamic import DynamicSkill
 
@@ -65,38 +63,30 @@ def _save_generated(skills: list):
 
 def _extract_json(text: str) -> dict:
     text = text.strip()
-    # Remove markdown code blocks if present
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
-    # Find first { ... }
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         raise ValueError("No se encontró JSON válido en la respuesta del fabricador")
     return json.loads(match.group())
 
 
-def fabricar_skill(
-    problema: str,
-    sector: str,
-    contexto: Optional[str] = None,
-) -> dict:
-    """
-    Dado un problema en lenguaje natural, genera una skill lista para usar y vender.
-    Devuelve el skill_def (dict) con el sistema listo.
-    """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise EnvironmentError("OPENAI_API_KEY no configurada")
-
-    contexto_bloque = f"CONTEXTO ADICIONAL: {contexto}" if contexto else ""
-
-    prompt = FABRICATOR_PROMPT.format(
-        sector=sector,
-        problema=problema,
-        contexto_bloque=contexto_bloque,
+def _fabricar_con_claude(prompt: str) -> str:
+    """Usa Claude claude-sonnet-4-6 como motor principal del fabricador."""
+    import anthropic
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}],
     )
+    return message.content[0].text
 
-    client = OpenAI(api_key=api_key)
+
+def _fabricar_con_openai(prompt: str) -> str:
+    """Fallback: usa GPT-4o si Claude no está disponible."""
+    from openai import OpenAI
+    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     response = client.chat.completions.create(
         model="gpt-4o",
         max_tokens=2000,
@@ -106,20 +96,56 @@ def fabricar_skill(
             {"role": "user", "content": prompt},
         ],
     )
+    return response.choices[0].message.content
 
-    raw = response.choices[0].message.content
+
+def fabricar_skill(
+    problema: str,
+    sector: str,
+    contexto: Optional[str] = None,
+) -> dict:
+    """
+    Dado un problema en lenguaje natural, genera una skill lista para usar y vender.
+    Intenta con Claude claude-sonnet-4-6 primero; si falla, usa GPT-4o.
+    """
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    openai_key = os.environ.get("OPENAI_API_KEY")
+
+    if not anthropic_key and not openai_key:
+        raise EnvironmentError("Se necesita ANTHROPIC_API_KEY o OPENAI_API_KEY")
+
+    contexto_bloque = f"CONTEXTO ADICIONAL: {contexto}" if contexto else ""
+    prompt = FABRICATOR_PROMPT.format(
+        sector=sector,
+        problema=problema,
+        contexto_bloque=contexto_bloque,
+    )
+
+    raw = None
+    motor_usado = None
+
+    if anthropic_key:
+        try:
+            raw = _fabricar_con_claude(prompt)
+            motor_usado = "claude-sonnet-4-6"
+        except Exception:
+            raw = None
+
+    if raw is None:
+        if not openai_key:
+            raise EnvironmentError("ANTHROPIC_API_KEY falló y OPENAI_API_KEY no está configurada")
+        raw = _fabricar_con_openai(prompt)
+        motor_usado = "gpt-4o"
+
     skill_def = _extract_json(raw)
 
-    # Ensure required fields
     skill_def.setdefault("version", "1.0.0")
     skill_def.setdefault("model", "gpt-4o")
     skill_def.setdefault("temperature", 0.3)
     skill_def["fabricado_en"] = int(time.time())
-    skill_def["fabricado_por"] = "MetaFabricador v1"
+    skill_def["fabricado_por"] = f"MetaFabricador v2 ({motor_usado})"
 
-    # Persist
     generated = _load_generated()
-    # Avoid duplicates by id
     existing_ids = {s.get("id") for s in generated}
     if skill_def.get("id") in existing_ids:
         skill_def["id"] = f"{skill_def['id']}-{int(time.time())}"
