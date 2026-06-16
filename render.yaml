@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: metaskills-factory
+    runtime: docker
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    port: 8091
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: METASKILLS_API_KEY
+        sync: false
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health

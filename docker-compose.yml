@@ -1,0 +1,15 @@
+services:
+  metaskills:
+    build: .
+    container_name: metaskills_factory
+    ports:
+      - "8091:8091"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - METASKILLS_API_KEY=${METASKILLS_API_KEY:-dev-key-2026}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
